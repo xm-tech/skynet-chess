@@ -30,26 +30,37 @@ function gateserver.closeclient(fd)
 	end
 end
 
+-- where does the handler comes from
 function gateserver.start(handler)
+	skynet.error("snax.gateserver started,handler.message=", handler.message, ",handler.name", handler.name)
 	assert(handler.message)
 	assert(handler.connect)
 
 	local listen_context = {}
 
 	function CMD.open( source, conf )
+		for key, value in pairs(conf) do
+			skynet.error("gateserver.start, key=", key, ",value=", value)
+		end
 		assert(not socket)
 		local address = conf.address or "0.0.0.0"
 		local port = assert(conf.port)
 		maxclient = conf.maxclient or 1024
 		nodelay = conf.nodelay
-		skynet.error(string.format("Listen on %s:%d", address, port))
+		skynet.error(string.format("snax.gateserver, Listen on %s:%d", address, port))
 		socket = socketdriver.listen(address, port)
 		listen_context.co = coroutine.running()
 		listen_context.fd = socket
+		-- 让出当前的任务执行流程，直到用 wakeup 唤醒它
+		skynet.error("CMD.open,wait wakeup")
 		skynet.wait(listen_context.co)
+		skynet.error("CMD.open, waked up")
 		conf.address = listen_context.addr
 		conf.port = listen_context.port
+		skynet.error("CMD.open,listen_context.co=", listen_context.co, ",socket=", socket, ",handler.open=", handler.open, ",conf.address=", conf.address, ",conf.port=", conf.port)
 		listen_context = nil
+		-- 开始处理 该 socket
+		skynet.error("socket=", socket)
 		socketdriver.start(socket)
 		if handler.open then
 			return handler.open(source, conf)
@@ -75,6 +86,7 @@ function gateserver.start(handler)
 
 	local function dispatch_queue()
 		local fd, msg, sz = netpack.pop(queue)
+		skynet.error("dispatch_queue,fd=", fd, ",msg=", msg, ",sz=", sz)
 		if fd then
 			-- may dispatch even the handler.message blocked
 			-- If the handler.message never block, the queue should be empty, so only fork once and then exit.
@@ -90,6 +102,7 @@ function gateserver.start(handler)
 	MSG.more = dispatch_queue
 
 	function MSG.open(fd, msg)
+		skynet.error("gateserver.MSG.open", fd, msg)
 		if client_number >= maxclient then
 			socketdriver.shutdown(fd)
 			return
@@ -142,10 +155,12 @@ function gateserver.start(handler)
 				listen_context.port = port
 				skynet.wakeup(co)
 				listen_context.co = nil
+				skynet.error("MSG.init", listen_context.addr, listen_context.port, listen_context.co)
 			end
 		end
 	end
 
+	-- 在当前服务内注册 socket 类型的消息的处理机制
 	skynet.register_protocol {
 		name = "socket",
 		id = skynet.PTYPE_SOCKET,	-- PTYPE_SOCKET = 6
@@ -155,6 +170,7 @@ function gateserver.start(handler)
 		dispatch = function (_, _, q, type, ...)
 			queue = q
 			if type then
+				skynet.error("dispatch socket msg", type, q, ...)
 				MSG[type](...)
 			end
 		end
@@ -163,6 +179,7 @@ function gateserver.start(handler)
 	local function init()
 		skynet.dispatch("lua", function (_, address, cmd, ...)
 			local f = CMD[cmd]
+			skynet.error("snax.gatesrever.init,cmd=", cmd, ..., ",address=", address, ",f=", f)
 			if f then
 				skynet.ret(skynet.pack(f(address, ...)))
 			else
@@ -171,9 +188,11 @@ function gateserver.start(handler)
 		end)
 	end
 
+	skynet.error("handler.embed", handler.embed)
 	if handler.embed then
 		init()
 	else
+		-- 启动1新服务去处理 lua 消息
 		skynet.start(init)
 	end
 end
